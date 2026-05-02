@@ -1,13 +1,13 @@
 import AppKit
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate, NSToolbarDelegate, NSSplitViewDelegate {
     private var panel: NSPanel!
+    private let splitView = NSSplitView()
     private let sidebar = NSStackView()
-    private var sidebarButtons: [NSButton] = []
-    private let backButton = NSButton()
-    private let forwardButton = NSButton()
-    private let tableView = ContextTableView()
+    private var sidebarButtons: [SidebarButton] = []
+    private let navigationControl = NavigationControl()
+    private let tableView = NSTableView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let shortcutLabel = NSTextField(labelWithString: "")
     private let searchField = NSSearchField()
@@ -16,26 +16,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var backStack: [URL] = []
     private var forwardStack: [URL] = []
     private var cutItemURLs: [URL] = []
+    private var visualSelectionAnchorRow: Int?
+    private var isProgrammaticSelectionChange = false
+    private var pendingYank = false
     private var allItems: [FileItem] = []
     private var visibleItems: [FileItem] = []
-
-    private let places: [Place] = [
-        Place(name: "Recents", symbol: "clock", url: nil),
-        Place(name: "Applications", symbol: "a.square", url: URL(fileURLWithPath: "/Applications")),
-        Place(name: "Desktop", symbol: "desktopcomputer", url: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")),
-        Place(name: "Documents", symbol: "doc", url: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Documents")),
-        Place(name: "Claude", symbol: "folder", url: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude")),
-        Place(name: "Skills", symbol: "folder", url: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/skills")),
-        Place(name: "Downloads", symbol: "arrow.down.circle", url: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")),
-        Place(name: "iCloud Drive", symbol: "icloud", url: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs")),
-        Place(name: "Home", symbol: "house", url: FileManager.default.homeDirectoryForCurrentUser)
-    ]
+    private var places: [Place] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         buildPanel()
         loadFolder(currentURL)
         showPanel()
+        DispatchQueue.main.async { [weak self] in
+            self?.focusFileList()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.focusFileList()
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -45,49 +43,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private func buildPanel() {
         panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 980, height: 640),
-            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
-        panel.title = "Clinder"
-        panel.titlebarAppearsTransparent = true
+        panel.title = ""
+        panel.titleVisibility = .hidden
+        panel.titlebarAppearsTransparent = false
         panel.isMovableByWindowBackground = true
         panel.level = .popUpMenu
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        panel.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.96)
-        panel.isOpaque = false
+        panel.backgroundColor = .windowBackgroundColor
+        panel.isOpaque = true
         panel.hasShadow = true
+        configureWindowToolbar()
 
         let root = NSView()
         root.identifier = NSUserInterfaceItemIdentifier("root")
         root.translatesAutoresizingMaskIntoConstraints = false
         panel.contentView = root
 
-        let visualEffect = NSVisualEffectView()
-        visualEffect.translatesAutoresizingMaskIntoConstraints = false
-        visualEffect.material = .hudWindow
-        visualEffect.blendingMode = .behindWindow
-        visualEffect.state = .active
-        root.addSubview(visualEffect)
+        let background = DynamicBackgroundView()
+        background.translatesAutoresizingMaskIntoConstraints = false
+        background.fillColor = .windowBackgroundColor
+        root.addSubview(background)
 
-        let content = NSStackView()
-        content.translatesAutoresizingMaskIntoConstraints = false
-        content.orientation = .horizontal
-        content.distribution = .fill
-        content.spacing = 0
-        root.addSubview(content)
+        splitView.translatesAutoresizingMaskIntoConstraints = false
+        splitView.isVertical = true
+        splitView.dividerStyle = .thin
+        splitView.delegate = self
+        root.addSubview(splitView)
 
-        let sidebarContainer = NSView()
+        let sidebarContainer = DynamicBackgroundView()
         sidebarContainer.translatesAutoresizingMaskIntoConstraints = false
-        sidebarContainer.wantsLayer = true
-        sidebarContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.72).cgColor
+        sidebarContainer.fillColor = .controlBackgroundColor
 
         sidebar.translatesAutoresizingMaskIntoConstraints = false
         sidebar.orientation = .vertical
         sidebar.alignment = .leading
         sidebar.spacing = 4
-        sidebar.edgeInsets = NSEdgeInsets(top: 58, left: 14, bottom: 16, right: 12)
+        sidebar.edgeInsets = NSEdgeInsets(top: 0, left: 14, bottom: 16, right: 12)
         sidebarContainer.addSubview(sidebar)
         buildSidebar()
 
@@ -97,24 +93,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         main.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         buildMainArea(in: main)
 
-        content.addArrangedSubview(sidebarContainer)
-        content.addArrangedSubview(main)
+        splitView.addArrangedSubview(sidebarContainer)
+        splitView.addArrangedSubview(main)
+        splitView.setHoldingPriority(.defaultHigh, forSubviewAt: 0)
 
         NSLayoutConstraint.activate([
-            visualEffect.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            visualEffect.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            visualEffect.topAnchor.constraint(equalTo: root.topAnchor),
-            visualEffect.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            content.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            content.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            content.topAnchor.constraint(equalTo: root.topAnchor),
-            content.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            sidebarContainer.widthAnchor.constraint(equalToConstant: 220),
+            background.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            background.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            background.topAnchor.constraint(equalTo: root.topAnchor),
+            background.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            splitView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            splitView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            splitView.topAnchor.constraint(equalTo: root.topAnchor),
+            splitView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             sidebar.leadingAnchor.constraint(equalTo: sidebarContainer.leadingAnchor),
             sidebar.trailingAnchor.constraint(equalTo: sidebarContainer.trailingAnchor),
             sidebar.topAnchor.constraint(equalTo: sidebarContainer.topAnchor),
             sidebar.bottomAnchor.constraint(lessThanOrEqualTo: sidebarContainer.bottomAnchor)
         ])
+
+        DispatchQueue.main.async { [weak self] in
+            self?.splitView.setPosition(220, ofDividerAt: 0)
+        }
 
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
@@ -131,7 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 self.openSelectedItem()
                 return nil
             }
-            if event.modifierFlags.contains([.command, .option]), event.charactersIgnoringModifiers == "c" {
+            if event.modifierFlags.contains([.command, .shift]), event.charactersIgnoringModifiers == "c" {
                 self.copySelectedPath()
                 return nil
             }
@@ -155,13 +155,99 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 self.goForward()
                 return nil
             }
+            if self.handleVimKey(event) {
+                return nil
+            }
             return event
         }
     }
 
+    private func configureWindowToolbar() {
+        configureNavigationControl()
+
+        titleLabel.font = .systemFont(ofSize: 16, weight: .semibold)
+        titleLabel.lineBreakMode = .byTruncatingMiddle
+
+        searchField.placeholderString = "Search"
+        searchField.translatesAutoresizingMaskIntoConstraints = false
+        searchField.controlSize = .regular
+        searchField.target = self
+        searchField.action = #selector(searchChanged(_:))
+        searchField.delegate = self
+
+        let toolbar = NSToolbar(identifier: .clinderToolbar)
+        toolbar.delegate = self
+        toolbar.displayMode = .iconOnly
+        toolbar.sizeMode = .regular
+        toolbar.allowsUserCustomization = false
+        toolbar.autosavesConfiguration = false
+        panel.toolbar = toolbar
+
+        if #available(macOS 11.0, *) {
+            panel.toolbarStyle = .unifiedCompact
+        }
+    }
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.clinderNavigation, .flexibleSpace, .clinderTitle, .flexibleSpace, .clinderSearch]
+    }
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        toolbarDefaultItemIdentifiers(toolbar)
+    }
+
+    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+        switch itemIdentifier {
+        case .clinderNavigation:
+            item.view = navigationControl
+            item.paletteLabel = "Navigation"
+        case .clinderTitle:
+            item.view = titleLabel
+            item.paletteLabel = "Folder"
+        case .clinderSearch:
+            item.view = searchField
+            item.paletteLabel = "Search"
+        default:
+            return nil
+        }
+        return item
+    }
+
+    func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool {
+        false
+    }
+
+    func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        160
+    }
+
+    func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        let mainMinimumWidth: CGFloat = 520
+        let maximumSidebarWidth = min(CGFloat(360), splitView.bounds.width - mainMinimumWidth)
+        return max(220, maximumSidebarWidth)
+    }
+
     private func buildSidebar() {
+        places = FinderSidebarLoader.loadPlaces()
+        var currentSection: String?
         for (index, place) in places.enumerated() {
-            let button = NSButton()
+            if place.section != currentSection {
+                currentSection = place.section
+                if let section = currentSection {
+                    let label = NSTextField(labelWithString: section)
+                    label.translatesAutoresizingMaskIntoConstraints = false
+                    label.font = .systemFont(ofSize: 11, weight: .semibold)
+                    label.textColor = .secondaryLabelColor
+                    sidebar.addArrangedSubview(label)
+                    label.widthAnchor.constraint(equalTo: sidebar.widthAnchor, constant: -26).isActive = true
+                    if sidebar.arrangedSubviews.count > 1 {
+                        label.topAnchor.constraint(equalTo: sidebar.arrangedSubviews[sidebar.arrangedSubviews.count - 2].bottomAnchor, constant: 12).isActive = true
+                    }
+                }
+            }
+
+            let button = SidebarButton()
             button.translatesAutoresizingMaskIntoConstraints = false
             button.title = place.name
             button.image = NSImage(systemSymbolName: place.symbol, accessibilityDescription: place.name)
@@ -175,44 +261,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             button.contentTintColor = .labelColor
             sidebar.addArrangedSubview(button)
             sidebarButtons.append(button)
-            button.widthAnchor.constraint(equalToConstant: 190).isActive = true
-            button.heightAnchor.constraint(equalToConstant: 30).isActive = true
+            button.widthAnchor.constraint(equalTo: sidebar.widthAnchor, constant: -26).isActive = true
+            button.heightAnchor.constraint(equalToConstant: 28).isActive = true
         }
-        updateSelectedPlace(index: places.firstIndex { $0.name == "Home" })
+        updateSelectedPlace(index: places.firstIndex { $0.url == FileManager.default.homeDirectoryForCurrentUser })
     }
 
     private func buildMainArea(in main: NSView) {
-        let toolbar = NSStackView()
-        toolbar.translatesAutoresizingMaskIntoConstraints = false
-        toolbar.orientation = .horizontal
-        toolbar.spacing = 8
-        toolbar.alignment = .centerY
-
-        configureToolbarButton(backButton, symbol: "chevron.left", label: "Back", action: #selector(backClicked(_:)))
-        configureToolbarButton(forwardButton, symbol: "chevron.right", label: "Forward", action: #selector(forwardClicked(_:)))
-
-        titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
-        titleLabel.lineBreakMode = .byTruncatingMiddle
-
-        searchField.placeholderString = "Search"
-        searchField.target = self
-        searchField.action = #selector(searchChanged(_:))
-        searchField.delegate = self
-
-        toolbar.addArrangedSubview(backButton)
-        toolbar.addArrangedSubview(forwardButton)
-        toolbar.addArrangedSubview(titleLabel)
-        toolbar.addArrangedSubview(NSView())
-        toolbar.addArrangedSubview(searchField)
-
-        tableView.headerView = nil
         tableView.usesAlternatingRowBackgroundColors = true
         tableView.allowsMultipleSelection = true
         tableView.rowHeight = 24
+        tableView.intercellSpacing = NSSize(width: 0, height: 0)
+        tableView.gridStyleMask = []
         tableView.dataSource = self
         tableView.delegate = self
         tableView.target = self
         tableView.doubleAction = #selector(doubleClickItem(_:))
+        panel.initialFirstResponder = tableView
 
         let nameColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
         nameColumn.title = "Name"
@@ -221,9 +286,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         tableView.addTableColumn(nameColumn)
 
         let modifiedColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("modified"))
-        modifiedColumn.title = "Modified"
+        modifiedColumn.title = "Date Modified"
         modifiedColumn.width = 200
         tableView.addTableColumn(modifiedColumn)
+
+        let sizeColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("size"))
+        sizeColumn.title = "Size"
+        sizeColumn.width = 100
+        tableView.addTableColumn(sizeColumn)
 
         let kindColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("kind"))
         kindColumn.title = "Kind"
@@ -236,42 +306,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
 
-        let shortcutStrip = NSVisualEffectView()
+        let shortcutStrip = DynamicBackgroundView()
         shortcutStrip.translatesAutoresizingMaskIntoConstraints = false
-        shortcutStrip.material = .hudWindow
-        shortcutStrip.blendingMode = .withinWindow
-        shortcutStrip.state = .active
-        shortcutStrip.wantsLayer = true
-        shortcutStrip.layer?.cornerRadius = 8
+        shortcutStrip.layer?.cornerRadius = 6
+        shortcutStrip.fillColor = .controlBackgroundColor
 
         shortcutLabel.translatesAutoresizingMaskIntoConstraints = false
-        shortcutLabel.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
+        shortcutLabel.font = .monospacedSystemFont(ofSize: 10, weight: .medium)
         shortcutLabel.textColor = .secondaryLabelColor
         shortcutLabel.lineBreakMode = .byTruncatingTail
         shortcutStrip.addSubview(shortcutLabel)
 
-        main.addSubview(toolbar)
         main.addSubview(scrollView)
         main.addSubview(shortcutStrip)
 
         NSLayoutConstraint.activate([
-            toolbar.leadingAnchor.constraint(equalTo: main.leadingAnchor, constant: 18),
-            toolbar.trailingAnchor.constraint(equalTo: main.trailingAnchor, constant: -18),
-            toolbar.topAnchor.constraint(equalTo: main.topAnchor, constant: 42),
-            toolbar.heightAnchor.constraint(equalToConstant: 36),
-            backButton.widthAnchor.constraint(equalToConstant: 30),
-            backButton.heightAnchor.constraint(equalToConstant: 28),
-            forwardButton.widthAnchor.constraint(equalToConstant: 30),
-            forwardButton.heightAnchor.constraint(equalToConstant: 28),
-            searchField.widthAnchor.constraint(equalToConstant: 220),
-            scrollView.leadingAnchor.constraint(equalTo: main.leadingAnchor, constant: 12),
-            scrollView.trailingAnchor.constraint(equalTo: main.trailingAnchor, constant: -12),
-            scrollView.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 10),
-            scrollView.bottomAnchor.constraint(equalTo: shortcutStrip.topAnchor, constant: -8),
-            shortcutStrip.leadingAnchor.constraint(equalTo: main.leadingAnchor, constant: 12),
-            shortcutStrip.trailingAnchor.constraint(equalTo: main.trailingAnchor, constant: -12),
-            shortcutStrip.bottomAnchor.constraint(equalTo: main.bottomAnchor, constant: -12),
-            shortcutStrip.heightAnchor.constraint(equalToConstant: 30),
+            navigationControl.widthAnchor.constraint(equalToConstant: 66),
+            navigationControl.heightAnchor.constraint(equalToConstant: 28),
+            searchField.widthAnchor.constraint(equalToConstant: 230),
+            searchField.heightAnchor.constraint(equalToConstant: 28),
+            scrollView.leadingAnchor.constraint(equalTo: main.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: main.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: main.topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: shortcutStrip.topAnchor, constant: -6),
+            shortcutStrip.leadingAnchor.constraint(equalTo: main.leadingAnchor, constant: 10),
+            shortcutStrip.trailingAnchor.constraint(equalTo: main.trailingAnchor, constant: -10),
+            shortcutStrip.bottomAnchor.constraint(equalTo: main.bottomAnchor, constant: -10),
+            shortcutStrip.heightAnchor.constraint(equalToConstant: 24),
             shortcutLabel.leadingAnchor.constraint(equalTo: shortcutStrip.leadingAnchor, constant: 12),
             shortcutLabel.trailingAnchor.constraint(equalTo: shortcutStrip.trailingAnchor, constant: -12),
             shortcutLabel.centerYAnchor.constraint(equalTo: shortcutStrip.centerYAnchor)
@@ -280,15 +341,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         updateShortcutHint()
     }
 
-    private func configureToolbarButton(_ button: NSButton, symbol: String, label: String, action: Selector) {
-        button.translatesAutoresizingMaskIntoConstraints = false
-        button.title = ""
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
-        button.imagePosition = .imageOnly
-        button.bezelStyle = .rounded
-        button.target = self
-        button.action = action
-        button.toolTip = label
+    private func configureNavigationControl() {
+        navigationControl.translatesAutoresizingMaskIntoConstraints = false
+        navigationControl.onBack = { [weak self] in
+            self?.goBack()
+        }
+        navigationControl.onForward = { [weak self] in
+            self?.goForward()
+        }
+        navigationControl.toolTip = "Back / Forward"
     }
 
     private func showPanel() {
@@ -299,17 +360,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private func keepPanelVisible() {
         panel.level = .popUpMenu
         panel.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
         panel.makeKey()
         panel.makeMain()
+        focusFileList()
     }
 
-    private func keepPanelVisibleAfterMenuAction() {
-        DispatchQueue.main.async { [weak self] in
-            self?.keepPanelVisible()
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
-            self?.keepPanelVisible()
-        }
+    private func focusFileList() {
+        panel.makeFirstResponder(tableView)
     }
 
     private func centerPanelOnPointerScreen() {
@@ -325,11 +383,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
         let visibleFrame = screen.visibleFrame
         let panelFrame = panel.frame
-        let origin = NSPoint(
+        let rawOrigin = NSPoint(
             x: visibleFrame.midX - panelFrame.width / 2,
             y: visibleFrame.midY - panelFrame.height / 2
         )
-        panel.setFrameOrigin(origin)
+        panel.setFrameOrigin(pixelAligned(rawOrigin, on: screen))
+    }
+
+    private func pixelAligned(_ point: NSPoint, on screen: NSScreen) -> NSPoint {
+        let scale = screen.backingScaleFactor
+        return NSPoint(
+            x: (point.x * scale).rounded() / scale,
+            y: (point.y * scale).rounded() / scale
+        )
     }
 
     @objc private func selectPlace(_ sender: NSButton) {
@@ -357,14 +423,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         openSelectedItem()
     }
 
-    @objc private func backClicked(_ sender: NSButton) {
-        goBack()
-    }
-
-    @objc private func forwardClicked(_ sender: NSButton) {
-        goForward()
-    }
-
     private func loadFolder(_ url: URL, recordHistory: Bool = true) {
         if recordHistory, hasLoadedFolder, currentURL != url {
             backStack.append(currentURL)
@@ -372,6 +430,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
         currentURL = url
         hasLoadedFolder = true
+        visualSelectionAnchorRow = nil
         titleLabel.stringValue = url.path == FileManager.default.homeDirectoryForCurrentUser.path ? "tuannvm" : url.lastPathComponent
         searchField.stringValue = ""
 
@@ -402,16 +461,134 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         loadFolder(destination, recordHistory: false)
     }
 
+    private func handleVimKey(_ event: NSEvent) -> Bool {
+        guard !isSearchFieldActive else { return false }
+        guard event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return false }
+        guard let rawKey = event.charactersIgnoringModifiers, rawKey.count == 1 else { return false }
+        let key = rawKey.lowercased()
+
+        if pendingYank {
+            pendingYank = false
+            if key == "p" {
+                copySelectedPath()
+                return true
+            }
+            if key == "y" {
+                copySelectedFiles()
+                return true
+            }
+        }
+
+        switch key {
+        case "/":
+            focusSearch()
+        case "j":
+            moveSelectionBy(1)
+        case "k":
+            moveSelectionBy(-1)
+        case "g" where rawKey == "G":
+            selectLastRow()
+        case "g":
+            selectFirstRow()
+        case "h":
+            goBack()
+        case "l":
+            openSelectedItem()
+        case "v":
+            toggleVisualSelection()
+        case "y":
+            beginYank()
+        case "d":
+            trashSelectedFiles()
+        case "p":
+            pasteFiles()
+        case "x":
+            cutSelectedFiles()
+        default:
+            return false
+        }
+        return true
+    }
+
+    private func beginYank() {
+        pendingYank = true
+        updateShortcutHint()
+    }
+
+    private var isSearchFieldActive: Bool {
+        guard let firstResponder = panel.firstResponder else { return false }
+        if firstResponder === searchField.currentEditor() {
+            return true
+        }
+        return searchField.currentEditor() === firstResponder
+    }
+
+    private func focusSearch() {
+        panel.makeFirstResponder(searchField)
+    }
+
+    private func moveSelectionBy(_ delta: Int) {
+        guard !visibleItems.isEmpty else { return }
+        let currentRow = tableView.selectedRow >= 0 ? tableView.selectedRow : (delta > 0 ? -1 : visibleItems.count)
+        let nextRow = min(max(currentRow + delta, 0), visibleItems.count - 1)
+
+        if let anchor = visualSelectionAnchorRow {
+            selectRows(anchor...nextRow)
+        } else {
+            selectRows(nextRow...nextRow)
+        }
+        tableView.scrollRowToVisible(nextRow)
+    }
+
+    private func selectFirstRow() {
+        guard !visibleItems.isEmpty else { return }
+        visualSelectionAnchorRow = nil
+        selectRows(0...0)
+        tableView.scrollRowToVisible(0)
+    }
+
+    private func selectLastRow() {
+        guard !visibleItems.isEmpty else { return }
+        let lastRow = visibleItems.count - 1
+        visualSelectionAnchorRow = nil
+        selectRows(lastRow...lastRow)
+        tableView.scrollRowToVisible(lastRow)
+    }
+
+    private func toggleVisualSelection() {
+        if visualSelectionAnchorRow != nil {
+            visualSelectionAnchorRow = nil
+        } else {
+            let row = tableView.selectedRow >= 0 ? tableView.selectedRow : min(0, visibleItems.count - 1)
+            guard row >= 0 else { return }
+            visualSelectionAnchorRow = row
+            selectRows(row...row)
+        }
+        updateShortcutHint()
+    }
+
+    private func selectRows(_ range: ClosedRange<Int>) {
+        let lower = max(min(range.lowerBound, range.upperBound), 0)
+        let upper = min(max(range.lowerBound, range.upperBound), visibleItems.count - 1)
+        guard lower <= upper else { return }
+
+        isProgrammaticSelectionChange = true
+        tableView.selectRowIndexes(IndexSet(integersIn: lower...upper), byExtendingSelection: false)
+        isProgrammaticSelectionChange = false
+        updateShortcutHint()
+    }
+
     private func updateNavigationButtons() {
-        backButton.isEnabled = !backStack.isEmpty
-        forwardButton.isEnabled = !forwardStack.isEmpty
+        navigationControl.canGoBack = !backStack.isEmpty
+        navigationControl.canGoForward = !forwardStack.isEmpty
     }
 
     private func updateSelectedPlace(index selectedIndex: Int?) {
         for (index, button) in sidebarButtons.enumerated() {
             let isSelected = index == selectedIndex
-            button.contentTintColor = isSelected ? .controlAccentColor : .labelColor
+            button.contentTintColor = .labelColor
             button.font = .systemFont(ofSize: NSFont.systemFontSize, weight: isSelected ? .semibold : .regular)
+            button.isSidebarSelected = isSelected
         }
     }
 
@@ -424,6 +601,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     private func loadRecents() {
+        visualSelectionAnchorRow = nil
         titleLabel.stringValue = "Recents"
         searchField.stringValue = ""
         let searchRoots = [
@@ -450,6 +628,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     private func applySearch(_ query: String) {
+        visualSelectionAnchorRow = nil
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             visibleItems = allItems
@@ -463,6 +642,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
+        if !isProgrammaticSelectionChange {
+            visualSelectionAnchorRow = nil
+        }
         updateShortcutHint()
     }
 
@@ -471,14 +653,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let hasSelection = selectedCount > 0
         let canPaste = !cutItemURLs.isEmpty || !pasteboardFileURLs().isEmpty
         if hasSelection {
-            let prefix = selectedCount == 1 ? "Return Open" : "\(selectedCount) selected"
+            let prefix: String
+            if pendingYank {
+                prefix = "YANK"
+            } else if visualSelectionAnchorRow != nil {
+                prefix = "VISUAL \(selectedCount)"
+            } else {
+                prefix = selectedCount == 1 ? "Return/l Open" : "\(selectedCount) selected"
+            }
             shortcutLabel.stringValue = canPaste
-                ? "\(prefix)   ⌘C Copy   ⌥⌘C Copy Path   ⌘X Cut   ⌘⌫ Trash   ⌘V Paste"
-                : "\(prefix)   ⌘C Copy   ⌥⌘C Copy Path   ⌘X Cut   ⌘⌫ Trash"
+                ? "\(prefix)   j/k Move   v Select   yy Yank   yp Path   x Cut   d Trash   p Paste"
+                : "\(prefix)   j/k Move   v Select   yy Yank   yp Path   x Cut   d Trash"
         } else {
             shortcutLabel.stringValue = canPaste
-                ? "Select a file, or press ⌘V to paste here"
-                : "Select a file to use keyboard actions"
+                ? "j/k Move   v Select   p Paste   / Search   or press ⌘V to paste here"
+                : "j/k Move   v Select   yy Yank   yp Path   d Trash   / Search"
         }
     }
 
@@ -649,6 +838,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         switch identifier.rawValue {
         case "modified":
             return Self.dateFormatter.string(from: item.modifiedDate)
+        case "size":
+            return item.sizeText
         case "kind":
             return item.kind
         default:
@@ -662,70 +853,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         formatter.timeStyle = .short
         return formatter
     }()
+
 }
 
-private struct Place {
-    let name: String
-    let symbol: String
-    let url: URL?
-}
-
-@MainActor
-private final class ContextTableView: NSTableView {
-    override func rightMouseDown(with event: NSEvent) {
-        let clickedRow = row(at: convert(event.locationInWindow, from: nil))
-        if clickedRow >= 0 {
-            selectRowIndexes(IndexSet(integer: clickedRow), byExtendingSelection: false)
-        }
-    }
-}
-
-private struct FileItem: Comparable {
-    let url: URL
-    let name: String
-    let isDirectory: Bool
-    let isPackage: Bool
-    let isHidden: Bool
-    let modifiedDate: Date
-    let kind: String
-
-    init(url: URL) {
-        self.url = url
-        self.name = url.lastPathComponent
-        self.isHidden = url.lastPathComponent.hasPrefix(".")
-
-        let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey, .contentModificationDateKey, .localizedTypeDescriptionKey])
-        self.isDirectory = values?.isDirectory ?? false
-        self.isPackage = values?.isPackage ?? false
-        self.modifiedDate = values?.contentModificationDate ?? Date.distantPast
-        if url.pathExtension == "app" {
-            self.kind = "Application"
-        } else if isDirectory && !isPackage {
-            self.kind = "Folder"
-        } else {
-            self.kind = values?.localizedTypeDescription ?? "File"
-        }
-    }
-
-    var isBrowsableDirectory: Bool {
-        isDirectory && !isPackage
-    }
-
-    static func < (lhs: FileItem, rhs: FileItem) -> Bool {
-        if lhs.isDirectory != rhs.isDirectory {
-            return lhs.isDirectory && !rhs.isDirectory
-        }
-        return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
-    }
-}
-
-@main
-enum ClinderApp {
-    @MainActor
-    static func main() {
-        let app = NSApplication.shared
-        let delegate = AppDelegate()
-        app.delegate = delegate
-        app.run()
-    }
-}
+let app = NSApplication.shared
+let delegate = AppDelegate()
+app.delegate = delegate
+app.run()
