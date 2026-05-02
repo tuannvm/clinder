@@ -2,4 +2,6 @@
 dist/
 tmp/
 Assets/AppIcon.iconset/
+.env
+.env.*
 .DS_Store
