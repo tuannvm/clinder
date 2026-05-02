@@ -7,18 +7,25 @@ APP_NAME="Clinder"
 BUNDLE_ID="dev.tuannvm.clinder"
 BUNDLE="$ROOT/dist/$APP_NAME.app"
 APP_BINARY="$BUNDLE/Contents/MacOS/$APP_NAME"
+APP_RESOURCES="$BUNDLE/Contents/Resources"
 INSTALLED_BUNDLE="/Applications/$APP_NAME.app"
 EXECUTABLE="$ROOT/.build/debug/$APP_NAME"
+APP_ICON="$ROOT/Assets/AppIcon.icns"
 
 cd "$ROOT"
 
 pkill -x "$APP_NAME" 2>/dev/null || true
 swift build
 
+if [[ ! -f "$APP_ICON" || "$ROOT/Assets/AppIcon.svg" -nt "$APP_ICON" ]]; then
+  "$ROOT/script/generate_icon.sh"
+fi
+
 rm -rf "$BUNDLE"
-mkdir -p "$BUNDLE/Contents/MacOS"
+mkdir -p "$BUNDLE/Contents/MacOS" "$APP_RESOURCES"
 cp "$EXECUTABLE" "$APP_BINARY"
 chmod +x "$APP_BINARY"
+cp "$APP_ICON" "$APP_RESOURCES/AppIcon.icns"
 
 cat > "$BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -31,6 +38,8 @@ cat > "$BUNDLE/Contents/Info.plist" <<PLIST
   <string>$BUNDLE_ID</string>
   <key>CFBundleName</key>
   <string>$APP_NAME</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
