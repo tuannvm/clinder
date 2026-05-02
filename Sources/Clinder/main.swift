@@ -5,7 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var panel: NSPanel!
     private let splitView = NSSplitView()
     private let sidebar = NSStackView()
-    private var sidebarButtons: [NSButton] = []
+    private var sidebarButtons: [SidebarButton] = []
     private let navigationControl = NavigationControl()
     private let tableView = NSTableView()
     private let titleLabel = NSTextField(labelWithString: "")
@@ -64,10 +64,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         root.translatesAutoresizingMaskIntoConstraints = false
         panel.contentView = root
 
-        let background = NSView()
+        let background = DynamicBackgroundView()
         background.translatesAutoresizingMaskIntoConstraints = false
-        background.wantsLayer = true
-        background.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        background.fillColor = .windowBackgroundColor
         root.addSubview(background)
 
         splitView.translatesAutoresizingMaskIntoConstraints = false
@@ -76,10 +75,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         splitView.delegate = self
         root.addSubview(splitView)
 
-        let sidebarContainer = NSView()
+        let sidebarContainer = DynamicBackgroundView()
         sidebarContainer.translatesAutoresizingMaskIntoConstraints = false
-        sidebarContainer.wantsLayer = true
-        sidebarContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        sidebarContainer.fillColor = .controlBackgroundColor
 
         sidebar.translatesAutoresizingMaskIntoConstraints = false
         sidebar.orientation = .vertical
@@ -249,7 +247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 }
             }
 
-            let button = NSButton()
+            let button = SidebarButton()
             button.translatesAutoresizingMaskIntoConstraints = false
             button.title = place.name
             button.image = NSImage(systemSymbolName: place.symbol, accessibilityDescription: place.name)
@@ -257,8 +255,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             button.alignment = .left
             button.bezelStyle = .regularSquare
             button.isBordered = false
-            button.wantsLayer = true
-            button.layer?.cornerRadius = 7
             button.target = self
             button.action = #selector(selectPlace(_:))
             button.tag = index
@@ -310,11 +306,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
 
-        let shortcutStrip = NSView()
+        let shortcutStrip = DynamicBackgroundView()
         shortcutStrip.translatesAutoresizingMaskIntoConstraints = false
-        shortcutStrip.wantsLayer = true
         shortcutStrip.layer?.cornerRadius = 6
-        shortcutStrip.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        shortcutStrip.fillColor = .controlBackgroundColor
 
         shortcutLabel.translatesAutoresizingMaskIntoConstraints = false
         shortcutLabel.font = .monospacedSystemFont(ofSize: 10, weight: .medium)
@@ -593,9 +588,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             let isSelected = index == selectedIndex
             button.contentTintColor = .labelColor
             button.font = .systemFont(ofSize: NSFont.systemFontSize, weight: isSelected ? .semibold : .regular)
-            button.layer?.backgroundColor = isSelected
-                ? NSColor.quaternaryLabelColor.withAlphaComponent(0.22).cgColor
-                : NSColor.clear.cgColor
+            button.isSidebarSelected = isSelected
         }
     }
 

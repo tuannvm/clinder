@@ -33,11 +33,15 @@ final class NavigationControl: NSView {
         setup()
     }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateLayerColors()
+        updateTint()
+    }
+
     private func setup() {
         wantsLayer = true
         layer?.cornerRadius = 13
-        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
-        layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.35).cgColor
         layer?.borderWidth = 1
 
         configure(button: backButton, symbol: "chevron.left", action: #selector(backClicked(_:)))
@@ -45,7 +49,6 @@ final class NavigationControl: NSView {
 
         divider.translatesAutoresizingMaskIntoConstraints = false
         divider.wantsLayer = true
-        divider.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.45).cgColor
 
         addSubview(backButton)
         addSubview(forwardButton)
@@ -66,6 +69,7 @@ final class NavigationControl: NSView {
             divider.heightAnchor.constraint(equalToConstant: 16)
         ])
 
+        updateLayerColors()
         updateTint()
     }
 
@@ -85,6 +89,12 @@ final class NavigationControl: NSView {
     private func updateTint() {
         backButton.contentTintColor = canGoBack ? .labelColor : .tertiaryLabelColor
         forwardButton.contentTintColor = canGoForward ? .labelColor : .tertiaryLabelColor
+    }
+
+    private func updateLayerColors() {
+        layer?.backgroundColor = resolvedCGColor(.controlBackgroundColor, for: effectiveAppearance)
+        layer?.borderColor = resolvedCGColor(.separatorColor.withAlphaComponent(0.35), for: effectiveAppearance)
+        divider.layer?.backgroundColor = resolvedCGColor(.separatorColor.withAlphaComponent(0.45), for: effectiveAppearance)
     }
 
     @objc private func backClicked(_ sender: NSButton) {
