@@ -1,5 +1,4 @@
 import AppKit
-import CoreServices
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate, NSToolbarDelegate, NSSplitViewDelegate {
@@ -7,10 +6,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private let splitView = NSSplitView()
     private let sidebar = NSStackView()
     private var sidebarButtons: [NSButton] = []
-    private let backButton = NSButton()
-    private let forwardButton = NSButton()
     private let navigationControl = NavigationControl()
-    private let tableView = ContextTableView()
+    private let tableView = NSTableView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let shortcutLabel = NSTextField(labelWithString: "")
     private let searchField = NSSearchField()
@@ -21,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var cutItemURLs: [URL] = []
     private var visualSelectionAnchorRow: Int?
     private var isProgrammaticSelectionChange = false
+    private var pendingYank = false
     private var allItems: [FileItem] = []
     private var visibleItems: [FileItem] = []
     private var places: [Place] = []
@@ -135,7 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 self.openSelectedItem()
                 return nil
             }
-            if event.modifierFlags.contains([.command, .option]), event.charactersIgnoringModifiers == "c" {
+            if event.modifierFlags.contains([.command, .shift]), event.charactersIgnoringModifiers == "c" {
                 self.copySelectedPath()
                 return nil
             }
@@ -359,17 +357,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         navigationControl.toolTip = "Back / Forward"
     }
 
-    private func configureToolbarButton(_ button: NSButton, symbol: String, label: String, action: Selector) {
-        button.translatesAutoresizingMaskIntoConstraints = false
-        button.title = ""
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
-        button.imagePosition = .imageOnly
-        button.bezelStyle = .rounded
-        button.target = self
-        button.action = action
-        button.toolTip = label
-    }
-
     private func showPanel() {
         centerPanelOnPointerScreen()
         keepPanelVisible()
@@ -386,15 +373,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     private func focusFileList() {
         panel.makeFirstResponder(tableView)
-    }
-
-    private func keepPanelVisibleAfterMenuAction() {
-        DispatchQueue.main.async { [weak self] in
-            self?.keepPanelVisible()
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
-            self?.keepPanelVisible()
-        }
     }
 
     private func centerPanelOnPointerScreen() {
@@ -450,14 +428,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         openSelectedItem()
     }
 
-    @objc private func backClicked(_ sender: NSButton) {
-        goBack()
-    }
-
-    @objc private func forwardClicked(_ sender: NSButton) {
-        goForward()
-    }
-
     private func loadFolder(_ url: URL, recordHistory: Bool = true) {
         if recordHistory, hasLoadedFolder, currentURL != url {
             backStack.append(currentURL)
@@ -502,6 +472,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         guard let rawKey = event.charactersIgnoringModifiers, rawKey.count == 1 else { return false }
         let key = rawKey.lowercased()
 
+        if pendingYank {
+            pendingYank = false
+            if key == "p" {
+                copySelectedPath()
+                return true
+            }
+            if key == "y" {
+                copySelectedFiles()
+                return true
+            }
+        }
+
         switch key {
         case "/":
             focusSearch()
@@ -520,7 +502,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         case "v":
             toggleVisualSelection()
         case "y":
-            copySelectedFiles()
+            beginYank()
         case "d":
             trashSelectedFiles()
         case "p":
@@ -531,6 +513,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             return false
         }
         return true
+    }
+
+    private func beginYank() {
+        pendingYank = true
+        updateShortcutHint()
     }
 
     private var isSearchFieldActive: Bool {
@@ -597,8 +584,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     private func updateNavigationButtons() {
-        backButton.isEnabled = !backStack.isEmpty
-        forwardButton.isEnabled = !forwardStack.isEmpty
         navigationControl.canGoBack = !backStack.isEmpty
         navigationControl.canGoForward = !forwardStack.isEmpty
     }
@@ -676,18 +661,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let canPaste = !cutItemURLs.isEmpty || !pasteboardFileURLs().isEmpty
         if hasSelection {
             let prefix: String
-            if visualSelectionAnchorRow != nil {
+            if pendingYank {
+                prefix = "YANK"
+            } else if visualSelectionAnchorRow != nil {
                 prefix = "VISUAL \(selectedCount)"
             } else {
                 prefix = selectedCount == 1 ? "Return/l Open" : "\(selectedCount) selected"
             }
             shortcutLabel.stringValue = canPaste
-                ? "\(prefix)   j/k Move   v Select   y Yank   x Cut   d Trash   p Paste   ⌥⌘C Path"
-                : "\(prefix)   j/k Move   v Select   y Yank   x Cut   d Trash   ⌥⌘C Path"
+                ? "\(prefix)   j/k Move   v Select   yy Yank   yp Path   x Cut   d Trash   p Paste"
+                : "\(prefix)   j/k Move   v Select   yy Yank   yp Path   x Cut   d Trash"
         } else {
             shortcutLabel.stringValue = canPaste
                 ? "j/k Move   v Select   p Paste   / Search   or press ⌘V to paste here"
-                : "j/k Move   v Select   y Yank   d Trash   / Search"
+                : "j/k Move   v Select   yy Yank   yp Path   d Trash   / Search"
         }
     }
 
@@ -876,360 +863,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
 }
 
-private extension NSToolbar.Identifier {
-    static let clinderToolbar = NSToolbar.Identifier("dev.tuannvm.clinder.toolbar")
-}
-
-private extension NSToolbarItem.Identifier {
-    static let clinderNavigation = NSToolbarItem.Identifier("dev.tuannvm.clinder.toolbar.navigation")
-    static let clinderTitle = NSToolbarItem.Identifier("dev.tuannvm.clinder.toolbar.title")
-    static let clinderSearch = NSToolbarItem.Identifier("dev.tuannvm.clinder.toolbar.search")
-}
-
-@_silgen_name("LSSharedFileListCreate")
-private func SFLCreate(_ allocator: CFAllocator?, _ listType: CFString, _ options: CFDictionary?) -> Unmanaged<LSSharedFileList>?
-
-@_silgen_name("LSSharedFileListCopySnapshot")
-private func SFLCopySnapshot(_ list: LSSharedFileList, _ seed: UnsafeMutablePointer<UInt32>?) -> Unmanaged<CFArray>?
-
-@_silgen_name("LSSharedFileListItemCopyDisplayName")
-private func SFLItemCopyDisplayName(_ item: LSSharedFileListItem) -> Unmanaged<CFString>
-
-@_silgen_name("LSSharedFileListItemCopyResolvedURL")
-private func SFLItemCopyResolvedURL(_ item: LSSharedFileListItem, _ flags: UInt32, _ error: UnsafeMutablePointer<Unmanaged<CFError>?>?) -> Unmanaged<CFURL>?
-
-private enum FinderSidebarLoader {
-    private static let topSidebarList = "com.apple.LSSharedFileList.TopSidebarSection"
-    private static let favoritesList = "com.apple.LSSharedFileList.FavoriteItems"
-    private static let favoriteVolumesList = "com.apple.LSSharedFileList.FavoriteVolumes"
-    private static let iCloudList = "com.apple.LSSharedFileList.iCloudItems"
-
-    static func loadPlaces() -> [Place] {
-        var places: [Place] = []
-        var seen = Set<String>()
-
-        let topItems = readList(topSidebarList)
-        if topItems.isEmpty {
-            append(Place(name: "Recents", symbol: "clock", url: nil), to: &places, seen: &seen)
-            append(Place(name: "Shared", symbol: "shared.with.you", url: nil), to: &places, seen: &seen)
-        } else {
-            for item in topItems {
-                append(topPlace(from: item), to: &places, seen: &seen)
-            }
-        }
-
-        for item in readList(favoritesList) {
-            guard let url = item.url else { continue }
-            append(
-                Place(name: item.displayName, symbol: symbol(for: item.displayName, url: url), url: url, section: "Favorites"),
-                to: &places,
-                seen: &seen
-            )
-        }
-
-        appendLocations(to: &places, seen: &seen)
-
-        if places.isEmpty {
-            return fallbackPlaces()
-        }
-        return places
-    }
-
-    private static func appendLocations(to places: inout [Place], seen: inout Set<String>) {
-        let iCloudDrive = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs")
-        let hasICloud = !readList(iCloudList).isEmpty || FileManager.default.fileExists(atPath: iCloudDrive.path)
-        if hasICloud {
-            append(Place(name: "iCloud Drive", symbol: "icloud", url: iCloudDrive, section: "Locations"), to: &places, seen: &seen)
-        }
-
-        let volumeItems = readList(favoriteVolumesList)
-        for item in volumeItems {
-            guard let url = item.url, !item.displayName.isEmpty else { continue }
-            append(
-                Place(name: item.displayName, symbol: symbol(for: item.displayName, url: url), url: url, section: "Locations"),
-                to: &places,
-                seen: &seen
-            )
-        }
-
-        append(Place(name: "AirDrop", symbol: "airdrop", url: nil, section: volumeItems.isEmpty && !hasICloud ? "Locations" : nil), to: &places, seen: &seen)
-        append(Place(name: "Network", symbol: "network", url: URL(fileURLWithPath: "/Network")), to: &places, seen: &seen)
-        append(Place(name: "Trash", symbol: "trash", url: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".Trash")), to: &places, seen: &seen)
-    }
-
-    private static func topPlace(from item: SidebarItem) -> Place {
-        let name = normalizedTopName(item.displayName)
-        if name == "Recents" {
-            return Place(name: "Recents", symbol: "clock", url: nil)
-        }
-        if name == "Shared" {
-            return Place(name: "Shared", symbol: "shared.with.you", url: nil)
-        }
-        return Place(name: name, symbol: symbol(for: name, url: item.url), url: item.url)
-    }
-
-    private static func normalizedTopName(_ name: String) -> String {
-        if name.localizedCaseInsensitiveContains("Shared") {
-            return "Shared"
-        }
-        if name.localizedCaseInsensitiveContains("Recent") {
-            return "Recents"
-        }
-        return name
-    }
-
-    private static func readList(_ listName: String) -> [SidebarItem] {
-        guard let list = SFLCreate(nil, listName as CFString, nil)?.takeRetainedValue() else {
-            return []
-        }
-
-        var seed: UInt32 = 0
-        guard let items = SFLCopySnapshot(list, &seed)?.takeRetainedValue() as? [LSSharedFileListItem] else {
-            return []
-        }
-
-        return items.compactMap { item in
-            let displayName = (SFLItemCopyDisplayName(item).takeRetainedValue() as String)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let resolvedURL = SFLItemCopyResolvedURL(item, 0, nil)?.takeRetainedValue() as URL?
-            guard !displayName.isEmpty || resolvedURL != nil else { return nil }
-            return SidebarItem(displayName: displayName, url: resolvedURL)
-        }
-    }
-
-    private static func append(_ place: Place, to places: inout [Place], seen: inout Set<String>) {
-        let key = place.url?.standardizedFileURL.path ?? "builtin:\(place.name)"
-        guard !seen.contains(key) else { return }
-        seen.insert(key)
-        places.append(place)
-    }
-
-    private static func symbol(for name: String, url: URL?) -> String {
-        let lowerName = name.lowercased()
-        let path = url?.standardizedFileURL.path.lowercased() ?? ""
-
-        if lowerName == "applications" || path == "/applications" { return "a.square" }
-        if lowerName == "desktop" || path.hasSuffix("/desktop") { return "desktopcomputer" }
-        if lowerName == "documents" || path.hasSuffix("/documents") { return "doc" }
-        if lowerName == "downloads" || path.hasSuffix("/downloads") { return "arrow.down.circle" }
-        if lowerName == "recents" { return "clock" }
-        if lowerName == "shared" { return "shared.with.you" }
-        if lowerName.contains("icloud") { return "icloud" }
-        if lowerName.contains("google drive") || path.contains("/cloudstorage/") { return "externaldrive" }
-        if lowerName == NSUserName().lowercased() || path == FileManager.default.homeDirectoryForCurrentUser.path.lowercased() { return "house" }
-        if lowerName == "network" { return "network" }
-        if lowerName == "trash" { return "trash" }
-        return "folder"
-    }
-
-    private static func fallbackPlaces() -> [Place] {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        return [
-            Place(name: "Recents", symbol: "clock", url: nil),
-            Place(name: "Shared", symbol: "shared.with.you", url: nil),
-            Place(name: "Applications", symbol: "a.square", url: URL(fileURLWithPath: "/Applications"), section: "Favorites"),
-            Place(name: "Desktop", symbol: "desktopcomputer", url: home.appendingPathComponent("Desktop")),
-            Place(name: "Documents", symbol: "doc", url: home.appendingPathComponent("Documents")),
-            Place(name: "Downloads", symbol: "arrow.down.circle", url: home.appendingPathComponent("Downloads")),
-            Place(name: "iCloud Drive", symbol: "icloud", url: home.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs"), section: "Locations"),
-            Place(name: NSUserName(), symbol: "house", url: home),
-            Place(name: "AirDrop", symbol: "airdrop", url: nil),
-            Place(name: "Network", symbol: "network", url: URL(fileURLWithPath: "/Network")),
-            Place(name: "Trash", symbol: "trash", url: home.appendingPathComponent(".Trash"))
-        ]
-    }
-}
-
-private struct SidebarItem {
-    let displayName: String
-    let url: URL?
-}
-
-@MainActor
-private final class NavigationControl: NSView {
-    var onBack: (() -> Void)?
-    var onForward: (() -> Void)?
-
-    var canGoBack = false {
-        didSet {
-            backButton.isEnabled = canGoBack
-            updateTint()
-        }
-    }
-
-    var canGoForward = false {
-        didSet {
-            forwardButton.isEnabled = canGoForward
-            updateTint()
-        }
-    }
-
-    private let backButton = NSButton()
-    private let forwardButton = NSButton()
-    private let divider = NSView()
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        setup()
-    }
-
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        setup()
-    }
-
-    private func setup() {
-        wantsLayer = true
-        layer?.cornerRadius = 13
-        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
-        layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.35).cgColor
-        layer?.borderWidth = 1
-
-        configure(button: backButton, symbol: "chevron.left", action: #selector(backClicked(_:)))
-        configure(button: forwardButton, symbol: "chevron.right", action: #selector(forwardClicked(_:)))
-
-        divider.translatesAutoresizingMaskIntoConstraints = false
-        divider.wantsLayer = true
-        divider.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.45).cgColor
-
-        addSubview(backButton)
-        addSubview(forwardButton)
-        addSubview(divider)
-
-        NSLayoutConstraint.activate([
-            backButton.leadingAnchor.constraint(equalTo: leadingAnchor),
-            backButton.topAnchor.constraint(equalTo: topAnchor),
-            backButton.bottomAnchor.constraint(equalTo: bottomAnchor),
-            backButton.widthAnchor.constraint(equalTo: widthAnchor, multiplier: 0.5),
-            forwardButton.trailingAnchor.constraint(equalTo: trailingAnchor),
-            forwardButton.topAnchor.constraint(equalTo: topAnchor),
-            forwardButton.bottomAnchor.constraint(equalTo: bottomAnchor),
-            forwardButton.widthAnchor.constraint(equalTo: widthAnchor, multiplier: 0.5),
-            divider.centerXAnchor.constraint(equalTo: centerXAnchor),
-            divider.centerYAnchor.constraint(equalTo: centerYAnchor),
-            divider.widthAnchor.constraint(equalToConstant: 1),
-            divider.heightAnchor.constraint(equalToConstant: 16)
-        ])
-
-        updateTint()
-    }
-
-    private func configure(button: NSButton, symbol: String, action: Selector) {
-        button.translatesAutoresizingMaskIntoConstraints = false
-        button.title = ""
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
-        button.imagePosition = .imageOnly
-        button.imageScaling = .scaleNone
-        button.isBordered = false
-        button.bezelStyle = .regularSquare
-        button.target = self
-        button.action = action
-        button.focusRingType = .none
-    }
-
-    private func updateTint() {
-        backButton.contentTintColor = canGoBack ? .labelColor : .tertiaryLabelColor
-        forwardButton.contentTintColor = canGoForward ? .labelColor : .tertiaryLabelColor
-    }
-
-    @objc private func backClicked(_ sender: NSButton) {
-        guard canGoBack else { return }
-        onBack?()
-    }
-
-    @objc private func forwardClicked(_ sender: NSButton) {
-        guard canGoForward else { return }
-        onForward?()
-    }
-}
-
-private struct Place {
-    let name: String
-    let symbol: String
-    let url: URL?
-    let section: String?
-
-    init(name: String, symbol: String, url: URL?, section: String? = nil) {
-        self.name = name
-        self.symbol = symbol
-        self.url = url
-        self.section = section
-    }
-}
-
-@MainActor
-private final class ContextTableView: NSTableView {
-    override var acceptsFirstResponder: Bool {
-        true
-    }
-
-    override func becomeFirstResponder() -> Bool {
-        true
-    }
-
-    override func rightMouseDown(with event: NSEvent) {
-        let clickedRow = row(at: convert(event.locationInWindow, from: nil))
-        if clickedRow >= 0 {
-            selectRowIndexes(IndexSet(integer: clickedRow), byExtendingSelection: false)
-        }
-    }
-}
-
-private struct FileItem: Comparable {
-    let url: URL
-    let name: String
-    let isDirectory: Bool
-    let isPackage: Bool
-    let isHidden: Bool
-    let modifiedDate: Date
-    let sizeText: String
-    let kind: String
-
-    init(url: URL) {
-        self.url = url
-        self.name = url.lastPathComponent
-        self.isHidden = url.lastPathComponent.hasPrefix(".")
-
-        let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey, .contentModificationDateKey, .localizedTypeDescriptionKey, .fileSizeKey])
-        self.isDirectory = values?.isDirectory ?? false
-        self.isPackage = values?.isPackage ?? false
-        self.modifiedDate = values?.contentModificationDate ?? Date.distantPast
-        if isDirectory && !isPackage {
-            self.sizeText = "--"
-        } else if let fileSize = values?.fileSize {
-            self.sizeText = ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file)
-        } else {
-            self.sizeText = "--"
-        }
-        if url.pathExtension == "app" {
-            self.kind = "Application"
-        } else if isDirectory && !isPackage {
-            self.kind = "Folder"
-        } else {
-            self.kind = values?.localizedTypeDescription ?? "File"
-        }
-    }
-
-    var isBrowsableDirectory: Bool {
-        isDirectory && !isPackage
-    }
-
-    static func < (lhs: FileItem, rhs: FileItem) -> Bool {
-        if lhs.isDirectory != rhs.isDirectory {
-            return lhs.isDirectory && !rhs.isDirectory
-        }
-        return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
-    }
-}
-
-@main
-enum ClinderApp {
-    @MainActor
-    static func main() {
-        let app = NSApplication.shared
-        let delegate = AppDelegate()
-        app.delegate = delegate
-        app.run()
-    }
-}
+let app = NSApplication.shared
+let delegate = AppDelegate()
+app.delegate = delegate
+app.run()
