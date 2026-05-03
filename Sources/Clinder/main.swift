@@ -155,6 +155,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 self.goForward()
                 return nil
             }
+            if self.handleSearchNavigationKey(event) {
+                return nil
+            }
             if self.handleVimKey(event) {
                 return nil
             }
@@ -525,6 +528,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     private func focusSearch() {
         panel.makeFirstResponder(searchField)
+        searchField.currentEditor()?.selectAll(nil)
+    }
+
+    private func handleSearchNavigationKey(_ event: NSEvent) -> Bool {
+        guard isSearchFieldActive else { return false }
+        guard event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return false }
+
+        switch event.keyCode {
+        case 125:
+            moveSelectionBy(1)
+            return true
+        case 126:
+            moveSelectionBy(-1)
+            return true
+        default:
+            return false
+        }
     }
 
     private func moveSelectionBy(_ delta: Int) {
@@ -633,11 +653,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         guard !trimmed.isEmpty else {
             visibleItems = allItems
             tableView.reloadData()
+            tableView.deselectAll(nil)
             updateShortcutHint()
             return
         }
         visibleItems = allItems.filter { $0.name.localizedCaseInsensitiveContains(trimmed) }
         tableView.reloadData()
+        if visibleItems.isEmpty {
+            tableView.deselectAll(nil)
+        } else {
+            selectRows(0...0)
+            tableView.scrollRowToVisible(0)
+        }
         updateShortcutHint()
     }
 
