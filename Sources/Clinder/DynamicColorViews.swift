@@ -32,8 +32,11 @@ final class DynamicBackgroundView: NSView {
 
 final class SidebarButton: NSButton {
     var isSidebarSelected = false {
-        didSet { updateLayerColors() }
+        didSet { updateStyle() }
     }
+
+    private let iconView = NSImageView()
+    private let titleLabel = NSTextField(labelWithString: "")
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -50,10 +53,50 @@ final class SidebarButton: NSButton {
         updateLayerColors()
     }
 
+    func configure(title: String, symbol: String) {
+        setAccessibilityLabel(title)
+        toolTip = title
+        titleLabel.stringValue = title
+        iconView.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+    }
+
     private func setup() {
+        title = ""
+        image = nil
+        isBordered = false
+        alignment = .left
+        focusRingType = .none
         wantsLayer = true
         layer?.cornerRadius = 7
+
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.imageScaling = .scaleProportionallyDown
+        iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.lineBreakMode = .byTruncatingTail
+
+        addSubview(iconView)
+        addSubview(titleLabel)
+
+        NSLayoutConstraint.activate([
+            iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: 16),
+            iconView.heightAnchor.constraint(equalToConstant: 16),
+            titleLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 7),
+            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
+
+        updateStyle()
+    }
+
+    private func updateStyle() {
         updateLayerColors()
+        titleLabel.font = .systemFont(ofSize: 13, weight: isSidebarSelected ? .semibold : .regular)
+        titleLabel.textColor = .labelColor
+        iconView.contentTintColor = .labelColor
     }
 
     private func updateLayerColors() {
