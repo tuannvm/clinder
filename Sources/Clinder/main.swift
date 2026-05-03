@@ -155,6 +155,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 self.goForward()
                 return nil
             }
+            if self.handleSearchNavigationKey(event) {
+                return nil
+            }
             if self.handleVimKey(event) {
                 return nil
             }
@@ -249,16 +252,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
             let button = SidebarButton()
             button.translatesAutoresizingMaskIntoConstraints = false
-            button.title = place.name
-            button.image = NSImage(systemSymbolName: place.symbol, accessibilityDescription: place.name)
-            button.imagePosition = .imageLeading
-            button.alignment = .left
+            button.configure(title: place.name, symbol: place.symbol)
             button.bezelStyle = .regularSquare
             button.isBordered = false
             button.target = self
             button.action = #selector(selectPlace(_:))
             button.tag = index
-            button.contentTintColor = .labelColor
             sidebar.addArrangedSubview(button)
             sidebarButtons.append(button)
             button.widthAnchor.constraint(equalTo: sidebar.widthAnchor, constant: -26).isActive = true
@@ -525,6 +524,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     private func focusSearch() {
         panel.makeFirstResponder(searchField)
+        searchField.currentEditor()?.selectAll(nil)
+    }
+
+    private func handleSearchNavigationKey(_ event: NSEvent) -> Bool {
+        guard isSearchFieldActive else { return false }
+        guard event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return false }
+
+        switch event.keyCode {
+        case 125:
+            moveSelectionBy(1)
+            return true
+        case 126:
+            moveSelectionBy(-1)
+            return true
+        default:
+            return false
+        }
     }
 
     private func moveSelectionBy(_ delta: Int) {
@@ -586,8 +602,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private func updateSelectedPlace(index selectedIndex: Int?) {
         for (index, button) in sidebarButtons.enumerated() {
             let isSelected = index == selectedIndex
-            button.contentTintColor = .labelColor
-            button.font = .systemFont(ofSize: NSFont.systemFontSize, weight: isSelected ? .semibold : .regular)
             button.isSidebarSelected = isSelected
         }
     }
@@ -633,11 +647,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         guard !trimmed.isEmpty else {
             visibleItems = allItems
             tableView.reloadData()
+            tableView.deselectAll(nil)
             updateShortcutHint()
             return
         }
         visibleItems = allItems.filter { $0.name.localizedCaseInsensitiveContains(trimmed) }
         tableView.reloadData()
+        if visibleItems.isEmpty {
+            tableView.deselectAll(nil)
+        } else {
+            selectRows(0...0)
+            tableView.scrollRowToVisible(0)
+        }
         updateShortcutHint()
     }
 
