@@ -282,21 +282,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         nameColumn.title = "Name"
         nameColumn.width = 380
         nameColumn.minWidth = 220
+        nameColumn.sortDescriptorPrototype = NSSortDescriptor(key: "name", ascending: true)
         tableView.addTableColumn(nameColumn)
 
         let modifiedColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("modified"))
         modifiedColumn.title = "Date Modified"
         modifiedColumn.width = 200
+        modifiedColumn.sortDescriptorPrototype = NSSortDescriptor(key: "modified", ascending: false)
         tableView.addTableColumn(modifiedColumn)
 
         let sizeColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("size"))
         sizeColumn.title = "Size"
         sizeColumn.width = 100
+        sizeColumn.sortDescriptorPrototype = NSSortDescriptor(key: "size", ascending: true)
         tableView.addTableColumn(sizeColumn)
 
         let kindColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("kind"))
         kindColumn.title = "Kind"
         kindColumn.width = 130
+        kindColumn.sortDescriptorPrototype = NSSortDescriptor(key: "kind", ascending: true)
         tableView.addTableColumn(kindColumn)
 
         let scrollView = NSScrollView()
@@ -441,8 +445,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         )) ?? []
 
         allItems = urls.map { FileItem(url: $0) }.sorted()
-        visibleItems = allItems
-        tableView.reloadData()
+        reloadVisibleItems()
         updateNavigationButtons()
         updateSelectedPlace(for: url)
         updateShortcutHint()
@@ -636,30 +639,95 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             }
         }
         allItems = items.sorted { $0.modifiedDate > $1.modifiedDate }.prefix(100).map { $0 }
-        visibleItems = allItems
-        tableView.reloadData()
+        reloadVisibleItems()
         updateShortcutHint()
     }
 
     private func applySearch(_ query: String) {
         visualSelectionAnchorRow = nil
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            visibleItems = allItems
-            tableView.reloadData()
-            tableView.deselectAll(nil)
-            updateShortcutHint()
-            return
-        }
-        visibleItems = allItems.filter { $0.name.localizedCaseInsensitiveContains(trimmed) }
-        tableView.reloadData()
-        if visibleItems.isEmpty {
+        reloadVisibleItems()
+        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || visibleItems.isEmpty {
             tableView.deselectAll(nil)
         } else {
             selectRows(0...0)
             tableView.scrollRowToVisible(0)
         }
         updateShortcutHint()
+    }
+
+    func tableView(_ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
+        let selectedURLs = Set(selectedItems().map(\.url))
+        visualSelectionAnchorRow = nil
+        reloadVisibleItems(preserving: selectedURLs)
+        updateShortcutHint()
+    }
+
+    private func reloadVisibleItems(preserving selectedURLs: Set<URL> = []) {
+        let trimmed = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let filteredItems = trimmed.isEmpty
+            ? allItems
+            : allItems.filter { $0.name.localizedCaseInsensitiveContains(trimmed) }
+
+        visibleItems = sortItems(filteredItems)
+        tableView.reloadData()
+
+        guard !selectedURLs.isEmpty else { return }
+        let indexes = visibleItems.enumerated().compactMap { index, item in
+            selectedURLs.contains(item.url) ? index : nil
+        }
+        if !indexes.isEmpty {
+            isProgrammaticSelectionChange = true
+            tableView.selectRowIndexes(IndexSet(indexes), byExtendingSelection: false)
+            isProgrammaticSelectionChange = false
+        }
+    }
+
+    private func sortItems(_ items: [FileItem]) -> [FileItem] {
+        let descriptors = tableView.sortDescriptors
+        guard let descriptor = descriptors.first, let key = descriptor.key else {
+            return items
+        }
+
+        return items.sorted { lhs, rhs in
+            compare(lhs, rhs, by: key, ascending: descriptor.ascending)
+        }
+    }
+
+    private func compare(_ lhs: FileItem, _ rhs: FileItem, by key: String, ascending: Bool) -> Bool {
+        if lhs.isDirectory != rhs.isDirectory {
+            return lhs.isDirectory && !rhs.isDirectory
+        }
+
+        let result: ComparisonResult
+        switch key {
+        case "modified":
+            result = lhs.modifiedDate.compare(rhs.modifiedDate)
+        case "size":
+            result = compareOptional(lhs.fileSize, rhs.fileSize)
+        case "kind":
+            result = lhs.kind.localizedStandardCompare(rhs.kind)
+        default:
+            result = lhs.name.localizedStandardCompare(rhs.name)
+        }
+
+        if result == .orderedSame {
+            return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+        }
+        return ascending ? result == .orderedAscending : result == .orderedDescending
+    }
+
+    private func compareOptional<T: Comparable>(_ lhs: T?, _ rhs: T?) -> ComparisonResult {
+        switch (lhs, rhs) {
+        case let (lhs?, rhs?):
+            if lhs == rhs { return .orderedSame }
+            return lhs < rhs ? .orderedAscending : .orderedDescending
+        case (nil, nil):
+            return .orderedSame
+        case (nil, _?):
+            return .orderedAscending
+        case (_?, nil):
+            return .orderedDescending
+        }
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {

@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Clinder"
 BUNDLE_ID="dev.tuannvm.clinder"
 APP_VERSION="${VERSION:-0.1.0}"
+MIN_MACOS_VERSION="${CLINDER_MIN_MACOS_VERSION:-27.0}"
 if [[ "$MODE" == "release" && -z "${VERSION:-}" ]]; then
   APP_VERSION="0.0.1"
 fi
@@ -61,7 +62,7 @@ cat > "$BUNDLE/Contents/Info.plist" <<PLIST
   <key>CFBundleVersion</key>
   <string>1</string>
   <key>LSMinimumSystemVersion</key>
-  <string>14.0</string>
+  <string>$MIN_MACOS_VERSION</string>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSPrincipalClass</key>

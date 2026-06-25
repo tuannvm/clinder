@@ -6,6 +6,8 @@ Clinder is a minimal Finder-like macOS popup for fullscreen workflows.
 
 Finder itself cannot float above a native fullscreen Space. Clinder uses an AppKit floating panel with fullscreen auxiliary Space behavior so it can act as a lightweight file browser overlay.
 
+Requires macOS 27 or newer.
+
 ## Features
 
 - Finder-style sidebar mirrored from Finder's sidebar lists

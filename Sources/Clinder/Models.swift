@@ -21,6 +21,7 @@ struct FileItem: Comparable {
     let isPackage: Bool
     let isHidden: Bool
     let modifiedDate: Date
+    let fileSize: Int64?
     let sizeText: String
     let kind: String
 
@@ -39,11 +40,12 @@ struct FileItem: Comparable {
         self.isDirectory = values?.isDirectory ?? false
         self.isPackage = values?.isPackage ?? false
         self.modifiedDate = values?.contentModificationDate ?? Date.distantPast
+        self.fileSize = values?.fileSize.map { Int64($0) }
 
         if isDirectory && !isPackage {
             self.sizeText = "--"
-        } else if let fileSize = values?.fileSize {
-            self.sizeText = ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file)
+        } else if let fileSize {
+            self.sizeText = ByteCountFormatter.string(fromByteCount: fileSize, countStyle: .file)
         } else {
             self.sizeText = "--"
         }
